@@ -118,9 +118,11 @@ function addSecurityHeaders(response: NextResponse, _request: NextRequest, nonce
   response.headers.set('X-Frame-Options', 'DENY')
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
 
-  const googleEnabled = !!(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID)
-  const effectiveNonce = nonce || crypto.randomBytes(16).toString('base64')
-  response.headers.set('Content-Security-Policy', buildCsp(effectiveNonce, googleEnabled))
+  if (!envFlag('MC_DISABLE_CSP')) {
+    const googleEnabled = !!(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID)
+    const effectiveNonce = nonce || crypto.randomBytes(16).toString('base64')
+    response.headers.set('Content-Security-Policy', buildCsp(effectiveNonce, googleEnabled))
+  }
 
   return response
 }
