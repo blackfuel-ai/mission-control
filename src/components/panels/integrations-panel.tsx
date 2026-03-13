@@ -3,6 +3,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 
+// ---------------------------------------------------------------------------
+// Custom OpenAI-compatible endpoint state
+// ---------------------------------------------------------------------------
+
+interface CustomEndpointState {
+  base_url: string
+  api_key_set: boolean
+  api_key_redacted: string
+}
+
 interface EnvVarInfo {
   redacted: string
   set: boolean
@@ -44,6 +54,14 @@ export function IntegrationsPanel() {
   const [pullingAll, setPullingAll] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<{ integrationId: string; keys: string[] } | null>(null)
 
+  // Custom OpenAI-compatible endpoint state
+  const [customEndpoint, setCustomEndpoint] = useState<CustomEndpointState | null>(null)
+  const [customEndpointEdits, setCustomEndpointEdits] = useState<{ base_url?: string; api_key?: string }>({})
+  const [customEndpointSaving, setCustomEndpointSaving] = useState(false)
+  const [customEndpointTesting, setCustomEndpointTesting] = useState(false)
+  const [customEndpointRemoving, setCustomEndpointRemoving] = useState(false)
+  const [revealApiKey, setRevealApiKey] = useState(false)
+
   const showFeedback = (ok: boolean, text: string) => {
     setFeedback({ ok, text })
     setTimeout(() => setFeedback(null), 3000)
@@ -79,7 +97,86 @@ export function IntegrationsPanel() {
     }
   }, [])
 
+  const fetchCustomEndpoint = useCallback(async () => {
+    try {
+      const res = await fetch('/api/integrations/custom-endpoint')
+      if (res.ok) {
+        const data = await res.json()
+        setCustomEndpoint(data)
+      }
+    } catch {
+      // silent — custom endpoint is optional
+    }
+  }, [])
+
   useEffect(() => { fetchIntegrations() }, [fetchIntegrations])
+  useEffect(() => { fetchCustomEndpoint() }, [fetchCustomEndpoint])
+
+  const handleSaveCustomEndpoint = async () => {
+    if (Object.keys(customEndpointEdits).length === 0) return
+    setCustomEndpointSaving(true)
+    try {
+      const res = await fetch('/api/integrations/custom-endpoint', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customEndpointEdits),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        showFeedback(true, 'Custom endpoint saved')
+        setCustomEndpointEdits({})
+        setRevealApiKey(false)
+        fetchCustomEndpoint()
+      } else {
+        showFeedback(false, data.error || 'Failed to save')
+      }
+    } catch {
+      showFeedback(false, 'Network error')
+    } finally {
+      setCustomEndpointSaving(false)
+    }
+  }
+
+  const handleTestCustomEndpoint = async () => {
+    setCustomEndpointTesting(true)
+    try {
+      const res = await fetch('/api/integrations/custom-endpoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test' }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        showFeedback(true, data.detail || 'Connection successful')
+      } else {
+        showFeedback(false, data.detail || 'Test failed')
+      }
+    } catch {
+      showFeedback(false, 'Network error')
+    } finally {
+      setCustomEndpointTesting(false)
+    }
+  }
+
+  const handleRemoveCustomEndpoint = async () => {
+    setCustomEndpointRemoving(true)
+    try {
+      const res = await fetch('/api/integrations/custom-endpoint', { method: 'DELETE' })
+      if (res.ok) {
+        showFeedback(true, 'Custom endpoint removed')
+        setCustomEndpointEdits({})
+        setRevealApiKey(false)
+        fetchCustomEndpoint()
+      } else {
+        const data = await res.json()
+        showFeedback(false, data.error || 'Failed to remove')
+      }
+    } catch {
+      showFeedback(false, 'Network error')
+    } finally {
+      setCustomEndpointRemoving(false)
+    }
+  }
 
   const handleEdit = (envKey: string, value: string) => {
     setEdits(prev => ({ ...prev, [envKey]: value }))
@@ -367,6 +464,26 @@ export function IntegrationsPanel() {
             No integrations in this category
           </div>
         )}
+
+        {/* Custom OpenAI-compatible endpoint card — shown in the AI category */}
+        {activeCategory === 'ai' && customEndpoint !== null && (
+          <CustomEndpointCard
+            endpoint={customEndpoint}
+            edits={customEndpointEdits}
+            revealApiKey={revealApiKey}
+            saving={customEndpointSaving}
+            testing={customEndpointTesting}
+            removing={customEndpointRemoving}
+            onChangeBaseUrl={(v) => setCustomEndpointEdits(prev => ({ ...prev, base_url: v }))}
+            onChangeApiKey={(v) => setCustomEndpointEdits(prev => ({ ...prev, api_key: v }))}
+            onCancelApiKeyEdit={() => setCustomEndpointEdits(prev => { const next = { ...prev }; delete next.api_key; return next })}
+            onToggleReveal={() => setRevealApiKey(prev => !prev)}
+            onSave={handleSaveCustomEndpoint}
+            onTest={handleTestCustomEndpoint}
+            onRemove={handleRemoveCustomEndpoint}
+            onDiscard={() => { setCustomEndpointEdits({}); setRevealApiKey(false) }}
+          />
+        )}
       </div>
 
       {/* Unsaved changes bar */}
@@ -427,6 +544,200 @@ export function IntegrationsPanel() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Custom OpenAI-compatible endpoint card
+// ---------------------------------------------------------------------------
+
+function CustomEndpointCard({
+  endpoint,
+  edits,
+  revealApiKey,
+  saving,
+  testing,
+  removing,
+  onChangeBaseUrl,
+  onChangeApiKey,
+  onCancelApiKeyEdit,
+  onToggleReveal,
+  onSave,
+  onTest,
+  onRemove,
+  onDiscard,
+}: {
+  endpoint: CustomEndpointState
+  edits: { base_url?: string; api_key?: string }
+  revealApiKey: boolean
+  saving: boolean
+  testing: boolean
+  removing: boolean
+  onChangeBaseUrl: (v: string) => void
+  onChangeApiKey: (v: string) => void
+  onCancelApiKeyEdit: () => void
+  onToggleReveal: () => void
+  onSave: () => void
+  onTest: () => void
+  onRemove: () => void
+  onDiscard: () => void
+}) {
+  const hasEdits = Object.keys(edits).length > 0
+  const effectiveBaseUrl = edits.base_url !== undefined ? edits.base_url : endpoint.base_url
+  const isConfigured = endpoint.base_url.length > 0 || endpoint.api_key_set
+
+  const status = isConfigured ? 'connected' : 'not_configured'
+  const statusColors = {
+    connected: 'bg-green-500',
+    not_configured: 'bg-muted-foreground/30',
+  }
+  const statusLabels = {
+    connected: 'Configured',
+    not_configured: 'Not configured',
+  }
+
+  return (
+    <div className={`bg-card border rounded-lg p-4 transition-colors ${hasEdits ? 'border-primary/50' : 'border-border'}`}>
+      {/* Card header */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2.5">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${statusColors[status]}`} />
+          <span className="text-sm font-medium text-foreground">Custom OpenAI-Compatible Endpoint</span>
+          <span className="text-2xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+            {statusLabels[status]}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {isConfigured && (
+            <Button
+              onClick={onTest}
+              disabled={testing || hasEdits}
+              title="Test connection"
+              variant="outline"
+              size="xs"
+              className="text-2xs flex items-center gap-1"
+            >
+              {testing ? (
+                <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 3L6 14" />
+                  <polyline points="6,3 6,8 1,8" />
+                  <polyline points="10,8 15,8 15,13" />
+                </svg>
+              )}
+              Test
+            </Button>
+          )}
+          {isConfigured && !hasEdits && (
+            <Button
+              onClick={onRemove}
+              disabled={removing}
+              title="Remove custom endpoint"
+              variant="outline"
+              size="xs"
+              className="text-2xs hover:text-destructive hover:border-destructive/50"
+            >
+              {removing ? 'Removing...' : 'Remove'}
+            </Button>
+          )}
+          {hasEdits && (
+            <Button onClick={onDiscard} variant="outline" size="xs" className="text-2xs">
+              Discard
+            </Button>
+          )}
+          {hasEdits && (
+            <Button onClick={onSave} disabled={saving} size="xs" className="text-2xs">
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Description */}
+      <p className="text-2xs text-muted-foreground mb-3">
+        Override the default OpenAI API endpoint with any OpenAI-compatible API (e.g.{' '}
+        <span className="font-mono text-muted-foreground/80">https://api.fuel1.ai/v1</span>).
+        When configured, this endpoint is used for OpenAI-compatible API calls.
+      </p>
+
+      {/* Fields */}
+      <div className="space-y-2">
+        {/* Base URL */}
+        <div className="flex items-center gap-2">
+          <span className="text-2xs font-mono text-muted-foreground/70 w-48 shrink-0">Base URL</span>
+          <div className="flex-1 flex items-center gap-1.5">
+            <input
+              type="text"
+              value={effectiveBaseUrl}
+              onChange={e => onChangeBaseUrl(e.target.value)}
+              placeholder="https://api.fuel1.ai/v1"
+              className="flex-1 px-2 py-1 text-xs bg-background border border-border rounded focus:border-primary focus:outline-none font-mono"
+              autoComplete="off"
+              data-1p-ignore
+            />
+          </div>
+        </div>
+
+        {/* API Key */}
+        <div className="flex items-center gap-2">
+          <span className="text-2xs font-mono text-muted-foreground/70 w-48 shrink-0">API Key</span>
+          <div className="flex-1 flex items-center gap-1.5">
+            {edits.api_key !== undefined ? (
+              <input
+                type={revealApiKey ? 'text' : 'password'}
+                value={edits.api_key}
+                onChange={e => onChangeApiKey(e.target.value)}
+                placeholder="Enter API key..."
+                className="flex-1 px-2 py-1 text-xs bg-background border border-primary/50 rounded focus:border-primary focus:outline-none font-mono"
+                autoComplete="off"
+                data-1p-ignore
+              />
+            ) : endpoint.api_key_set ? (
+              <span className="text-xs font-mono text-muted-foreground">{endpoint.api_key_redacted}</span>
+            ) : (
+              <span className="text-xs text-muted-foreground/50 italic">not set</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {edits.api_key !== undefined && (
+              <Button
+                onClick={onToggleReveal}
+                title={revealApiKey ? 'Hide value' : 'Show value'}
+                variant="ghost"
+                size="icon-xs"
+                className="w-6 h-6"
+              >
+                {revealApiKey ? <EyeOffIcon /> : <EyeIcon />}
+              </Button>
+            )}
+            {edits.api_key === undefined && (
+              <Button
+                onClick={() => onChangeApiKey('')}
+                title="Edit API key"
+                variant="ghost"
+                size="icon-xs"
+                className="w-6 h-6"
+              >
+                <EditIcon />
+              </Button>
+            )}
+            {edits.api_key !== undefined && (
+              <Button
+                onClick={onCancelApiKeyEdit}
+                title="Cancel edit"
+                variant="ghost"
+                size="icon-xs"
+                className="w-6 h-6 hover:text-destructive"
+              >
+                <XIcon />
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
