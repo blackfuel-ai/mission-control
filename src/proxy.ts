@@ -194,7 +194,13 @@ export function proxy(request: NextRequest) {
   // Check for session cookie
   const sessionToken = request.cookies.get(MC_SESSION_COOKIE_NAME)?.value || request.cookies.get(LEGACY_MC_SESSION_COOKIE_NAME)?.value
 
-  // API routes: accept session cookie OR API key
+  // Check for trusted reverse proxy auth header (e.g. X-User-Email forwarded by Envoy Gateway)
+  const proxyAuthHeader = (process.env.MC_PROXY_AUTH_HEADER || '').trim()
+  const hasProxyAuth = proxyAuthHeader
+    ? !!(request.headers.get(proxyAuthHeader) || '').trim()
+    : false
+
+  // API routes: accept session cookie OR API key OR proxy auth
   if (pathname.startsWith('/api/')) {
     const configuredApiKey = (process.env.API_KEY || '').trim()
     const apiKey = extractApiKeyFromRequest(request)
@@ -204,7 +210,7 @@ export function proxy(request: NextRequest) {
     // allowed to pass through proxy auth gate.
     const looksLikeAgentApiKey = /^mca_[a-f0-9]{48}$/i.test(apiKey)
 
-    if (sessionToken || hasValidApiKey || looksLikeAgentApiKey) {
+    if (sessionToken || hasValidApiKey || looksLikeAgentApiKey || hasProxyAuth) {
       const { response, nonce } = nextResponseWithNonce(request)
       return addSecurityHeaders(response, request, nonce)
     }
@@ -212,8 +218,8 @@ export function proxy(request: NextRequest) {
     return addSecurityHeaders(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }), request)
   }
 
-  // Page routes: redirect to login if no session
-  if (sessionToken) {
+  // Page routes: pass through if session or proxy auth present
+  if (sessionToken || hasProxyAuth) {
     const { response, nonce } = nextResponseWithNonce(request)
     return addSecurityHeaders(response, request, nonce)
   }
